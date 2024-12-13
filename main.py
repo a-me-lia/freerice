@@ -22,6 +22,8 @@ from monitor import MonitorBot, rate_limit
 
 rate_limit_flag = threading.Event()
 
+NACS_SPINLOCK = threading.Event()
+
 PROXIED = 0
 MAX_NUM_INSTANCES = 168
 
@@ -95,33 +97,36 @@ class FreericeBot(Thread):
         return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
     def login(self, username, password):
-        while rate_limit.is_set():
-            print(bcolors.WARNING + f"[Instance {self.instance_id}] Starting held due to rate Limited. Retrying in 30 seconds" + bcolors.ENDC)
-            sleep(30)
-            continue
-        """Logs into the FreeRice website."""
-        try:
-            login_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Login')]"))
-            )
-            login_button.click()
-            sleep(1)
+        login = False
+        while not login:
+            while(1):
+                if rate_limit.is_set(): print(bcolors.WARNING + f"[Instance {self.instance_id}] Starting held due to rate Limited." + bcolors.ENDC)
+                while rate_limit.is_set():
+                    continue
+                """Logs into the FreeRice website."""
+                try:
+                    login_button = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Login')]"))
+                    )
+                    login_button.click()
+                    sleep(1)
 
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "input#login-username"))
-            )
-            self.driver.find_element(By.CSS_SELECTOR, "input#login-username").send_keys(username)
-            self.driver.find_element(By.CSS_SELECTOR, "input#login-password").send_keys(password)
-            self.driver.find_element(By.CSS_SELECTOR, "button").click()
-            sleep(1)
+                    WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "input#login-username"))
+                    )
+                    self.driver.find_element(By.CSS_SELECTOR, "input#login-username").send_keys(username)
+                    self.driver.find_element(By.CSS_SELECTOR, "input#login-password").send_keys(password)
+                    self.driver.find_element(By.CSS_SELECTOR, "button").click()
+                    sleep(1)
 
-            WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'game')]")
-            )).click()
-            sleep(1)
+                    WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'game')]")
+                    )).click()
+                    sleep(1)
+                    login = True
 
-        except Exception as e:
-            raise RuntimeError(bcolors.FAIL + f"[Instance {self.instance_id}] Login failed" + bcolors.ENDC)
+                except Exception as e:
+                    break
 
     def restart_worker(self):
         """Restarts the current bot instance."""
@@ -174,14 +179,17 @@ class FreericeBot(Thread):
                             print(bcolors.WARNING + f"[Instance {self.instance_id}] Halted from monitor signal" + bcolors.ENDC)
                         while rate_limit.is_set():
                             time.sleep(1)
-                            if not rate_limit.isSet():
+                            if not rate_limit.is_set():
                                 print(bcolors.OKBLUE + f"[Instance {self.instance_id}] Restarted after rate limit cleared" + bcolors.ENDC)
                             continue
+
                         # Find and click correct answer button
                         buttons = WebDriverWait(self.driver, 10).until(
                             EC.presence_of_all_elements_located((By.CLASS_NAME, "card-button"))
                         )
-
+                        while NACS_SPINLOCK.is_set():
+                            continue
+                        NACS_SPINLOCK.set()
                         answer_clicked = False
                         for button in buttons:
                             if button.text.strip() == str(answer):
@@ -189,10 +197,12 @@ class FreericeBot(Thread):
                                 answer_clicked = True
                                 self.stats['correct'] += 1
                                 break
-
+                                
                         if not answer_clicked:
                             random.choice(buttons).click()
                             self.stats['random'] += 1
+
+                        NACS_SPINLOCK.clear()
 
                         self.stats['total'] += 1
                         print(f"[Instance {self.instance_id}] Stats: "
