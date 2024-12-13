@@ -8,6 +8,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from threading import Thread
 
+from config import *
+
 # Shared rate_limit flag
 rate_limit = threading.Event()
 
@@ -93,9 +95,9 @@ class MonitorBot(Thread):
                             rate_limit.set()
 
                     # Refresh the page
-                    time.sleep(5)  # Wait 10 seconds between refreshes
+                    time.sleep(MONITOR_FREQUENCY/2) 
                     self.driver.refresh()
-                    time.sleep(5)
+                    time.sleep(MONITOR_FREQUENCY/2)
 
 
                 except Exception as e:

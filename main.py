@@ -14,22 +14,17 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from colors import bcolors
+
 
 import threading
 
 from proxies import fetch_proxies
 from monitor import MonitorBot, rate_limit
+from config import *
 
 rate_limit_flag = threading.Event()
-
 NACS_SPINLOCK = threading.Event()
-
-PROXIED = 0
-MAX_NUM_INSTANCES = 168
-
-from colors import bcolors
-
-
 
 class FreericeBot(Thread):
     def __init__(self, instance_id, stats, running_event, proxy):
@@ -147,7 +142,7 @@ class FreericeBot(Thread):
             try:
                 self.setup_driver()
                 self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
-                self.login("mikoyae", "GingerAil541!")
+                self.login(FREERICE_USERNAME, FREERICE_PASSWORD)
 
                 # Wait for game to load
                 WebDriverWait(self.driver, 10).until(
@@ -189,7 +184,7 @@ class FreericeBot(Thread):
                         )
                         while NACS_SPINLOCK.is_set():
                             continue
-                        NACS_SPINLOCK.set()
+                        # NACS_SPINLOCK.set()
                         answer_clicked = False
                         for button in buttons:
                             if button.text.strip() == str(answer):
