@@ -121,7 +121,7 @@ class FreericeBot(Thread):
             sleep(1)
 
         except Exception as e:
-            raise RuntimeError(f"[Instance {self.instance_id}] Login failed: {e}")
+            raise RuntimeError(bcolors.FAIL + f"[Instance {self.instance_id}] Login failed" + bcolors.ENDC)
 
     def restart_worker(self):
         """Restarts the current bot instance."""
@@ -137,6 +137,7 @@ class FreericeBot(Thread):
     def is_answer_correct(self, answer_element):
         return True  # Placeholder for actual answer verification logic
     def run(self):
+        while(1):
             """Main bot loop."""
             try:
                 self.setup_driver()
@@ -219,6 +220,7 @@ class FreericeBot(Thread):
 
             except Exception as e:
                 self.restart_worker()
+                continue
 
             finally:
                 if self.driver:

@@ -93,8 +93,10 @@ class MonitorBot(Thread):
                             rate_limit.set()
 
                     # Refresh the page
+                    time.sleep(5)  # Wait 10 seconds between refreshes
                     self.driver.refresh()
-                    time.sleep(10)  # Wait 10 seconds between refreshes
+                    time.sleep(5)
+
 
                 except Exception as e:
                     print(f"[Monitor] Error in monitor bot: {e}")
