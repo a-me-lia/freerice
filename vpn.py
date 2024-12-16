@@ -2,11 +2,10 @@ import subprocess
 
 import time
 
-from config import USE_VPN
+
 
 def switch_vpn_server(times):
-    if not USE_VPN:
-        return
+
     """
     Switches to a random NordVPN server using the NordVPN CLI.
     """
@@ -42,8 +41,7 @@ def switch_vpn_server(times):
         print(f"Error while switching VPN server: {e}")
 
 def disconnect_vpn():
-    if not USE_VPN:
-        return
+
     """
     Disconnects the current VPN connection using NordVPN CLI.
     """

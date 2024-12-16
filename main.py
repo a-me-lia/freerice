@@ -32,7 +32,6 @@ import threading
 
 from proxies import fetch_proxies
 from monitor import MonitorBot, rate_limit, all_restart
-from config import *
 from vpn import switch_vpn_server
 
 rate_limit_flag = threading.Event()
@@ -258,7 +257,6 @@ class BotManager:
         self.start_time = time()
         self.last_5_min_stats = deque()
         self.instance_lock = threading.Lock()
-        signal.signal(signal.SIGINT, self.handle_interrupt)
         
         # Stats printing thread
         self.stats_thread = None
@@ -353,11 +351,15 @@ class BotManager:
               f"Total: {self.stats['total']} | "
               f"QPS: {overall_qps:.2f} | "
               f"5min QPS: {last_5_min_qps:.2f} | "
-              f"QPS/Worker: {qps_per_worker:.2f}", end='')
+              f"QPS/Worker: {qps_per_worker:.2f}")
 
     def start_bot(self, initial_instances):
         """Start the bot with initial number of instances"""
         print(f"Starting with {initial_instances} instances...")
+
+        self.monitor_bot = MonitorBot(USE_VPN)
+        self.monitor_bot.start()
+            
         self.running_event.set()
         self.print_stats_event.set()
         self.scaling_event.set()
@@ -370,42 +372,69 @@ class BotManager:
         self.scaling_thread = Thread(target=self.scale_instances)
         self.scaling_thread.start()
 
+        # Handle proxies if enabled
+        proxies = ['none', 'none']
+        if PROXIED:
+            proxies = fetch_proxies()
+            random.shuffle(proxies)
+            print("Proxies:", proxies)
+
+        # Start VPN if enabled
+        if USE_VPN:
+            switch_vpn_server(1)
+
         # Create and start initial instances
         for i in range(initial_instances):
-            new_instance = FreericeBot(i + 1, self.stats, self.running_event, 'none')
+            new_instance = FreericeBot(
+                i + 1, 
+                self.stats, 
+                self.running_event, 
+                proxies[i % len(proxies) - 1] if PROXIED else 'none'
+            )
             print(f"\r[Info] Starting instance {i+1}...")
-            sleep(8)  # Delay between instance starts
+            sleep(8)
             new_instance.start()
             self.instances.append(new_instance)
 
         self.last_5_min_stats.clear()
         self.start_time = time()
 
-    def stop_bot(self):
-        """Stop all bot instances"""
-        print("\nStopping all instances...")
-        self.running_event.clear()
-        self.print_stats_event.clear()
-        self.scaling_event.clear()
-        
-        # Stop all instances
-        for instance in self.instances:
-            instance.join()
-        
-        # Stop threads
-        if self.stats_thread and self.stats_thread.is_alive():
-            self.stats_thread.join()
-        if self.scaling_thread and self.scaling_thread.is_alive():
-            self.scaling_thread.join()
-        
-        self.instances = []
-        print("\nAll instances stopped.")
-
-    def handle_interrupt(self, signum, frame):
-        """Handle Ctrl+C"""
-        print("\nInterrupt received, stopping...")
-        self.stop_bot()
-        sys.exit(0)
+    def scale_instances(self):
+        """Add or remove instances based on available memory"""
+        while self.scaling_event.is_set():
+            current_time = time()
+            if current_time - self.last_scale_time >= self.scale_interval:
+                available_memory = self.get_available_memory()
+                current_instances = len(self.instances)
+                
+                with self.instance_lock:
+                    if available_memory < self.memory_threshold and current_instances > 1:
+                        # Remove one instance
+                        instance = self.instances.pop()
+                        instance.running_event.clear()
+                        instance.join()
+                        print(f"\n[Scaling] Removed instance (memory: {available_memory:.2f}GB)")
+                    elif available_memory > self.memory_threshold + 0.5:
+                        target_instances = self.calculate_target_instances()
+                        if current_instances < target_instances:
+                            # Add one instance with proper proxy if enabled
+                            proxy = 'none'
+                            if PROXIED:
+                                proxies = fetch_proxies()
+                                proxy = proxies[current_instances % len(proxies) - 1]
+                            
+                            new_instance = FreericeBot(
+                                current_instances + 1, 
+                                self.stats, 
+                                self.running_event,
+                                proxy
+                            )
+                            new_instance.start()
+                            self.instances.append(new_instance)
+                            print(f"\n[Scaling] Added instance (memory: {available_memory:.2f}GB)")
+                
+                self.last_scale_time = current_time
+            sleep(1)
 
 def main():
     parser = argparse.ArgumentParser(description='Freerice Bot Manager')
@@ -413,7 +442,23 @@ def main():
                       help='Initial number of instances (default: 1)')
     parser.add_argument('-c', '--continuous', action='store_true',
                       help='Run continuously with automatic restarts')
+    parser.add_argument('-u', '--username', type=str, default='mikoyae',
+                      help='Freerice username (default: mikoyae)')
+    parser.add_argument('-p', '--password', type=str, default='GingerAil541!',
+                      help='Freerice password')
+    parser.add_argument('--vpn', action='store_true',
+                      help='Enable VPN usage')
+    parser.add_argument('--proxy', action='store_true',
+                      help='Enable proxy usage')
+
     args = parser.parse_args()
+
+    # Set global constants
+    global FREERICE_USERNAME, FREERICE_PASSWORD, MONITOR_FREQUENCY, USE_VPN, PROXIED
+    FREERICE_USERNAME = args.username
+    FREERICE_PASSWORD = args.password
+    USE_VPN = 1 if args.vpn else 0
+    PROXIED = 1 if args.proxy else 0
 
     manager = BotManager()
     
@@ -431,3 +476,4 @@ def main():
 if __name__ == "__main__":
     stats_lock = Event()
     main()
+

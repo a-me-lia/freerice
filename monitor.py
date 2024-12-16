@@ -8,7 +8,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from threading import Thread
 
-from config import *
+
 from vpn import switch_vpn_server
 
 # Shared rate_limit flag
@@ -17,11 +17,12 @@ all_restart = threading.Event()
 from colors import bcolors
 
 class MonitorBot(Thread):
-    def __init__(self):
+    def __init__(self, vpn):
         super().__init__()
         self.driver = None
         self.running = True
         self.times = 0
+        self.USE_VPN = vpn
 
     def setup_driver(self):
         """Set up the Selenium WebDriver."""
@@ -78,7 +79,7 @@ class MonitorBot(Thread):
                 self.setup_driver()
                 self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
                 print(bcolors.OKCYAN + "[Monitor] Monitor up" + bcolors.ENDC)
-                time.sleep(MONITOR_FREQUENCY)
+                time.sleep(8)
 
                 while self.running:
 
@@ -104,15 +105,18 @@ class MonitorBot(Thread):
                             # If not found, set the rate limit flag
                             if not rate_limit.is_set():
                                 print(bcolors.WARNING + "[Monitor] No active content detected. Setting rate limit flag." + bcolors.ENDC)
-                                switch_vpn_server(self.times)
+                                if self.USE_VPN:
+                                    switch_vpn_server(self.times)
                                 self.times = self.times + 1
                                 rate_limit.set() 
                             else:
                                 print(bcolors.WARNING + "[Monitor] Switching server" + bcolors.ENDC)
-                                switch_vpn_server(self.times)
+                                if self.USE_VPN:
+                                    switch_vpn_server(self.times)
+
                                 self.times = self.times + 1
 
-                        time.sleep(MONITOR_FREQUENCY)
+                        time.sleep(8)
                         self.driver.refresh()
 
                     except Exception as e:
