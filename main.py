@@ -16,6 +16,16 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from colors import bcolors
 
+import argparse
+import signal
+import sys
+import threading
+from threading import Thread, Event
+from collections import deque
+from time import sleep, time
+import random
+
+
 
 
 import threading
@@ -237,115 +247,88 @@ class FreericeBot(Thread):
             sleep(10)
 
 
+import psutil as psutil
 
-class UIManager:
-    def __init__(self, root):
-        self.root = root
+class BotManager:
+    def __init__(self):
         self.instances = []
         self.running_event = Event()
         self.stats = {'correct': 0, 'random': 0, 'total': 0}
-        self.stats_lock = stats_lock
-
-        self.start_time = time.time()
+        self.stats_lock = threading.Lock()
+        self.start_time = time()
         self.last_5_min_stats = deque()
-        self.setup_ui()
-
-    def setup_ui(self):
-        self.root.title("Freerice Bot Manager")
-        self.root.geometry("500x400")
-
-        self.status_label = tk.Label(self.root, text="Bot Status: Stopped", font=("Arial", 12))
-        self.status_label.pack(pady=10)
-
-        self.stats_label = tk.Label(self.root, text="Correct: 0 | Random: 0 | Total: 0", font=("Arial", 12))
-        self.stats_label.pack(pady=10)
-
-        self.qps_label = tk.Label(self.root, text="Overall QPS: 0 | Last 5 Min QPS: 0", font=("Arial", 12))
-        self.qps_label.pack(pady=10)
-
-        self.worker_qps_label = tk.Label(self.root, text="QPS per Worker: 0", font=("Arial", 12))
-        self.worker_qps_label.pack(pady=10)
-        self.start_button = tk.Button(self.root, text="Start Bot", command=self.runn)
-        self.start_button.pack(pady=5)
-        self.start_button = tk.Button(self.root, text="Start Bot", command=self.start_bot)
-        self.start_button.pack(pady=5)
-
-        self.stop_button = tk.Button(self.root, text="Stop Bot", command=self.stop_bot, state=tk.DISABLED)
-        self.stop_button.pack(pady=5)
-
-        self.instance_label = tk.Label(self.root, text="Instances: 1")
-        self.instance_label.pack(pady=5)
-
-        self.instance_slider = tk.Scale(self.root, from_=1, to=MAX_NUM_INSTANCES, orient="horizontal", command=self.update_instances)
-        self.instance_slider.pack()
-
-    def update_instances(self, value):
-        self.instance_label.config(text=f"Instances: {value}")
-
-    def runn(self):
-        while(1):
-            self.start_bot()
-            sleep(60 * 30)
-            self.stop_bot()
-            sleep(10)
+        self.instance_lock = threading.Lock()
+        signal.signal(signal.SIGINT, self.handle_interrupt)
         
+        # Stats printing thread
+        self.stats_thread = None
+        self.print_stats_event = Event()
+        
+        # Auto-scaling settings
+        self.last_scale_time = time()
+        self.scale_interval = 10  # seconds between scaling checks
+        self.memory_threshold = 1.0  # GB
+        self.chrome_memory_usage = 0.3  # GB per instance
+        self.scaling_thread = None
+        self.scaling_event = Event()
 
-    def start_bot(self):
-        self.status_label.config(text="Bot Status: Running")
-        self.start_button.config(state=tk.DISABLED)
-        self.stop_button.config(state=tk.NORMAL)
-        self.running_event.set()
+    def get_available_memory(self):
+        """Get available memory in GB"""
+        return psutil.virtual_memory().available / (1024 * 1024 * 1024)
 
-        rate_limit.set()
+    def calculate_target_instances(self):
+        """Calculate target number of instances based on available memory"""
+        available_memory = self.get_available_memory()
+        target = int((available_memory - self.memory_threshold) / self.chrome_memory_usage)
+        return max(1, min(target, 100))  # Keep between 1 and 100 instances
 
-        if PROXIED:
-            proxies = fetch_proxies()
-            random.shuffle(proxies)
-            print(proxies)
-        else:
-            proxies = ['none', 'none']
-        monitor_bot = MonitorBot()
-        monitor_bot.start()
+    def scale_instances(self):
+        """Add or remove instances based on available memory"""
+        while self.scaling_event.is_set():
+            current_time = time()
+            if current_time - self.last_scale_time >= self.scale_interval:
+                available_memory = self.get_available_memory()
+                current_instances = len(self.instances)
+                
+                with self.instance_lock:
+                    if available_memory < self.memory_threshold and current_instances > 1:
+                        # Remove one instance
+                        instance = self.instances.pop()
+                        instance.running_event.clear()
+                        instance.join()
+                        print(f"\n[Scaling] Removed instance (memory: {available_memory:.2f}GB)")
+                    elif available_memory > self.memory_threshold + 0.5:  # Add buffer to prevent oscillation
+                        target_instances = self.calculate_target_instances()
+                        if current_instances < target_instances:
+                            # Add one instance
+                            new_instance = FreericeBot(
+                                current_instances + 1, 
+                                self.stats, 
+                                self.running_event, 
+                                'none'
+                            )
+                            new_instance.start()
+                            self.instances.append(new_instance)
+                            print(f"\n[Scaling] Added instance (memory: {available_memory:.2f}GB)")
+                
+                self.last_scale_time = current_time
+            sleep(1)
 
-        num_instances = int(self.instance_slider.get())
-        self.instances = [
-            FreericeBot(i + 1, self.stats, self.running_event, proxies[i % len(proxies) - 1]) for i in range(num_instances)
-        ]
-        switch_vpn_server(1)
-        i = 0
-        for instance in self.instances:
-            if rate_limit.is_set(): 
-                print(bcolors.WARNING + f"[Initialization {i+1}] Starting held due to rate Limited." + bcolors.ENDC)
-            while rate_limit.is_set():
-                continue
-            print(bcolors.OKGREEN + f"[Initialization {i+1}] Starting instance" + bcolors.ENDC)
-            sleep(8)
-            instance.start()
-            i = i+1
+    def print_stats_loop(self):
+        """Continuously print stats until stopped"""
+        while self.print_stats_event.is_set():
+            self.print_stats()
+            sleep(1)
 
-        self.last_5_min_stats.clear()
-        self.start_time = time.time()
-        self.update_stats()
-
-    def stop_bot(self):
-        self.running_event.clear()
-        for instance in self.instances:
-            instance.join()
-
-        self.instances = []
-        self.status_label.config(text="Bot Status: Stopped")
-        self.start_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-
-        print("VPN disconnected.")
-
-    def update_stats(self):
-        current_time = time.time()
-
-        # Update overall QPS
+    def print_stats(self):
+        """Print current statistics"""
+        current_time = time()
         elapsed_time = current_time - self.start_time
+        available_memory = self.get_available_memory()
+        
+        # Calculate QPS
         overall_qps = self.stats['total'] / elapsed_time if elapsed_time > 0 else 0
-
+        
         # Update last 5 minutes QPS
         self.last_5_min_stats.append((current_time, self.stats['total']))
         while self.last_5_min_stats and self.last_5_min_stats[0][0] < current_time - 300:
@@ -358,24 +341,93 @@ class UIManager:
         else:
             last_5_min_qps = 0
 
-        # Update QPS per worker
+        # Calculate QPS per worker
         num_workers = len(self.instances)
         qps_per_worker = overall_qps / num_workers if num_workers > 0 else 0
 
-        # Update UI
-        self.stats_label.config(
-            text=f"Correct: {self.stats['correct']} | Random: {self.stats['random']} | Total: {self.stats['total']}"
-        )
-        self.qps_label.config(
-            text=f"Overall QPS: {overall_qps:.4f} | Last 5 Min QPS: {last_5_min_qps:.4f}"
-        )
-        self.worker_qps_label.config(text=f"QPS per Worker: {qps_per_worker:.4f}")
+        # Clear line and print stats
+        print(f"\r[Stats] Memory: {available_memory:.2f}GB | "
+              f"Instances: {num_workers} | "
+              f"Correct: {self.stats['correct']} | "
+              f"Random: {self.stats['random']} | "
+              f"Total: {self.stats['total']} | "
+              f"QPS: {overall_qps:.2f} | "
+              f"5min QPS: {last_5_min_qps:.2f} | "
+              f"QPS/Worker: {qps_per_worker:.2f}", end='')
 
-        if self.running_event.is_set():
-            self.root.after(1000, self.update_stats)
+    def start_bot(self, initial_instances):
+        """Start the bot with initial number of instances"""
+        print(f"Starting with {initial_instances} instances...")
+        self.running_event.set()
+        self.print_stats_event.set()
+        self.scaling_event.set()
+
+        # Start stats printing thread
+        self.stats_thread = Thread(target=self.print_stats_loop)
+        self.stats_thread.start()
+
+        # Start scaling thread
+        self.scaling_thread = Thread(target=self.scale_instances)
+        self.scaling_thread.start()
+
+        # Create and start initial instances
+        for i in range(initial_instances):
+            new_instance = FreericeBot(i + 1, self.stats, self.running_event, 'none')
+            print(f"\r[Info] Starting instance {i+1}...")
+            sleep(8)  # Delay between instance starts
+            new_instance.start()
+            self.instances.append(new_instance)
+
+        self.last_5_min_stats.clear()
+        self.start_time = time()
+
+    def stop_bot(self):
+        """Stop all bot instances"""
+        print("\nStopping all instances...")
+        self.running_event.clear()
+        self.print_stats_event.clear()
+        self.scaling_event.clear()
+        
+        # Stop all instances
+        for instance in self.instances:
+            instance.join()
+        
+        # Stop threads
+        if self.stats_thread and self.stats_thread.is_alive():
+            self.stats_thread.join()
+        if self.scaling_thread and self.scaling_thread.is_alive():
+            self.scaling_thread.join()
+        
+        self.instances = []
+        print("\nAll instances stopped.")
+
+    def handle_interrupt(self, signum, frame):
+        """Handle Ctrl+C"""
+        print("\nInterrupt received, stopping...")
+        self.stop_bot()
+        sys.exit(0)
+
+def main():
+    parser = argparse.ArgumentParser(description='Freerice Bot Manager')
+    parser.add_argument('-i', '--instances', type=int, default=1,
+                      help='Initial number of instances (default: 1)')
+    parser.add_argument('-c', '--continuous', action='store_true',
+                      help='Run continuously with automatic restarts')
+    args = parser.parse_args()
+
+    manager = BotManager()
+    
+    try:
+        if args.continuous:
+            manager.run_continuous(args.instances)
+        else:
+            manager.start_bot(args.instances)
+            # Wait for interrupt
+            while True:
+                sleep(1)
+    except KeyboardInterrupt:
+        manager.stop_bot()
 
 if __name__ == "__main__":
     stats_lock = Event()
-    root = tk.Tk()
-    app = UIManager(root)
-    root.mainloop()
+    main()
