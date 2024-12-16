@@ -17,11 +17,13 @@ from selenium.webdriver.support import expected_conditions as EC
 from colors import bcolors
 
 
+
 import threading
 
 from proxies import fetch_proxies
-from monitor import MonitorBot, rate_limit
+from monitor import MonitorBot, rate_limit, all_restart
 from config import *
+from vpn import switch_vpn_server
 
 rate_limit_flag = threading.Event()
 NACS_SPINLOCK = threading.Event()
@@ -99,6 +101,7 @@ class FreericeBot(Thread):
                 while rate_limit.is_set():
                     continue
                 """Logs into the FreeRice website."""
+                self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
                 try:
                     login_button = WebDriverWait(self.driver, 10).until(
                         EC.element_to_be_clickable((By.XPATH, "//a[contains(text(), 'Login')]"))
@@ -121,17 +124,9 @@ class FreericeBot(Thread):
                     login = True
 
                 except Exception as e:
+                    self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
                     break
 
-    def restart_worker(self):
-        """Restarts the current bot instance."""
-        print(f"[Instance {self.instance_id}] Restarting worker...")
-        if self.driver:
-            self.driver.quit()
-        self.setup_driver()
-        self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
-        self.login("marchseventh", "GingerAil541!")
-        sleep(3)
 
 
     def is_answer_correct(self, answer_element):
@@ -141,7 +136,7 @@ class FreericeBot(Thread):
             """Main bot loop."""
             try:
                 self.setup_driver()
-                self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
+
                 self.login(FREERICE_USERNAME, FREERICE_PASSWORD)
 
                 # Wait for game to load
@@ -149,7 +144,17 @@ class FreericeBot(Thread):
                     EC.presence_of_element_located((By.CLASS_NAME, "card-title"))
                 )
 
-                while self.running_event.is_set():
+                sleep(0.5)
+
+                while self.running_event.is_set() and not all_restart.is_set():
+                    try:
+                        username_element = WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.XPATH, f"//a[text()='{FREERICE_USERNAME}']")
+                        )
+                    )
+                    except Exception:
+                        print(bcolors.WARNING + f"[Instance {self.instance_id}] Username element not found. Re-logging in..." + bcolors.ENDC)
+                        self.login(FREERICE_USERNAME, FREERICE_PASSWORD)
                     try:
                         # Get the question
                         question_element = WebDriverWait(self.driver, 10).until(
@@ -167,16 +172,14 @@ class FreericeBot(Thread):
                                 raise ValueError("Invalid question format")
                         except (ValueError, IndexError) as e:
                             print(bcolors.FAIL + f"[Instance {self.instance_id}] Error parsing question '{question}': {e}" + bcolors.ENDC)
-
-                            self.restart_worker()
-                            continue
+                            break
                         if rate_limit.is_set():
                             print(bcolors.WARNING + f"[Instance {self.instance_id}] Halted from monitor signal" + bcolors.ENDC)
                         while rate_limit.is_set():
                             time.sleep(1)
                             if not rate_limit.is_set():
                                 print(bcolors.OKBLUE + f"[Instance {self.instance_id}] Restarted after rate limit cleared" + bcolors.ENDC)
-                            continue
+                                continue
 
                         # Find and click correct answer button
                         buttons = WebDriverWait(self.driver, 10).until(
@@ -205,6 +208,7 @@ class FreericeBot(Thread):
                             f"Correct: {self.stats['correct']}, "
                             f"Random: {self.stats['random']}, "
                             f"Accuracy: {(self.stats['correct']/self.stats['total'])*100:.2f}%")
+                        
 
                         try:
                             next_button = WebDriverWait(self.driver, 10).until(
@@ -222,14 +226,15 @@ class FreericeBot(Thread):
                             print(bcolors.FAIL + f"[Instance {self.instance_id}] Error on question" + bcolors.ENDC)
                             self.restart_worker()
                             continue
-
             except Exception as e:
-                self.restart_worker()
-                continue
-
+                if self.driver:
+                    self.driver.quit()
             finally:
                 if self.driver:
                     self.driver.quit()
+            if self.driver:
+                self.driver.quit()
+            sleep(10)
 
 
 
@@ -260,7 +265,8 @@ class UIManager:
 
         self.worker_qps_label = tk.Label(self.root, text="QPS per Worker: 0", font=("Arial", 12))
         self.worker_qps_label.pack(pady=10)
-
+        self.start_button = tk.Button(self.root, text="Start Bot", command=self.runn)
+        self.start_button.pack(pady=5)
         self.start_button = tk.Button(self.root, text="Start Bot", command=self.start_bot)
         self.start_button.pack(pady=5)
 
@@ -276,12 +282,21 @@ class UIManager:
     def update_instances(self, value):
         self.instance_label.config(text=f"Instances: {value}")
 
+    def runn(self):
+        while(1):
+            self.start_bot()
+            sleep(60 * 30)
+            self.stop_bot()
+            sleep(10)
+        
+
     def start_bot(self):
         self.status_label.config(text="Bot Status: Running")
         self.start_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.running_event.set()
 
+        rate_limit.set()
 
         if PROXIED:
             proxies = fetch_proxies()
@@ -296,6 +311,7 @@ class UIManager:
         self.instances = [
             FreericeBot(i + 1, self.stats, self.running_event, proxies[i % len(proxies) - 1]) for i in range(num_instances)
         ]
+        switch_vpn_server(1)
         i = 0
         for instance in self.instances:
             if rate_limit.is_set(): 
@@ -303,7 +319,7 @@ class UIManager:
             while rate_limit.is_set():
                 continue
             print(bcolors.OKGREEN + f"[Initialization {i+1}] Starting instance" + bcolors.ENDC)
-            sleep(3)
+            sleep(8)
             instance.start()
             i = i+1
 
@@ -320,6 +336,8 @@ class UIManager:
         self.status_label.config(text="Bot Status: Stopped")
         self.start_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
+
+        print("VPN disconnected.")
 
     def update_stats(self):
         current_time = time.time()

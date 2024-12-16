@@ -9,10 +9,11 @@ from selenium.webdriver.chrome.options import Options
 from threading import Thread
 
 from config import *
+from vpn import switch_vpn_server
 
 # Shared rate_limit flag
 rate_limit = threading.Event()
-
+all_restart = threading.Event()
 from colors import bcolors
 
 class MonitorBot(Thread):
@@ -20,6 +21,7 @@ class MonitorBot(Thread):
         super().__init__()
         self.driver = None
         self.running = True
+        self.times = 0
 
     def setup_driver(self):
         """Set up the Selenium WebDriver."""
@@ -70,42 +72,55 @@ class MonitorBot(Thread):
 
     def run(self):
         """Main loop to monitor the webpage."""
-        try:
-            self.setup_driver()
-            self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
-            print(bcolors.OKCYAN + "[Monitor] Monitor up" + bcolors.ENDC)
 
-            while self.running:
-                try:
-                    # Check for the presence of the div with class name 'card-title'
+        while(1):
+            try:
+                self.setup_driver()
+                self.driver.get("https://play.freerice.com/categories/multiplication-table?level=2")
+                print(bcolors.OKCYAN + "[Monitor] Monitor up" + bcolors.ENDC)
+                time.sleep(MONITOR_FREQUENCY)
+
+                while self.running:
+
+                        
                     try:
-                        WebDriverWait(self.driver, 5).until(
-                            EC.presence_of_element_located((By.CLASS_NAME, "card-title"))
-                        )
+                        # Check for the presence of the div with class name 'card-title'
+                        try:
+                            WebDriverWait(self.driver, 15).until(
+                                EC.presence_of_element_located((By.CLASS_NAME, "card-title"))
+                            )
 
-                        # If found, unset the rate limit flag
-                        if rate_limit.is_set():
-                            print(bcolors.OKCYAN + "[Monitor] Active content detected. Unsetting rate limit flag." + bcolors.ENDC)
-                            rate_limit.clear()
+                            # If found, unset the rate limit flag
+                            if rate_limit.is_set():
+                                print(bcolors.OKCYAN + "[Monitor] Active content detected. Unsetting rate limit flag." + bcolors.ENDC)
+                                rate_limit.clear()
+                                if self.times % 16 == 15:
+                                    all_restart.set()
+                                    time.sleep(60)
+                                    all_restart.clear()
+                                    
+                        
+                        except:
+                            # If not found, set the rate limit flag
+                            if not rate_limit.is_set():
+                                print(bcolors.WARNING + "[Monitor] No active content detected. Setting rate limit flag." + bcolors.ENDC)
+                                switch_vpn_server(self.times)
+                                self.times = self.times + 1
+                                rate_limit.set() 
+                            else:
+                                print(bcolors.WARNING + "[Monitor] Switching server" + bcolors.ENDC)
+                                switch_vpn_server(self.times)
+                                self.times = self.times + 1
 
-                    except:
-                        # If not found, set the rate limit flag
-                        if not rate_limit.is_set():
-                            print(bcolors.WARNING + "[Monitor] No active content detected. Setting rate limit flag." + bcolors.ENDC)
-                            rate_limit.set()
+                        time.sleep(MONITOR_FREQUENCY)
+                        self.driver.refresh()
 
-                    # Refresh the page
-                    time.sleep(MONITOR_FREQUENCY/2) 
-                    self.driver.refresh()
-                    time.sleep(MONITOR_FREQUENCY/2)
+                    except Exception as e:
+                        print(f"[Monitor] Error in monitor bot: {e}")
 
-
-                except Exception as e:
-                    print(f"[Monitor] Error in monitor bot: {e}")
-
-        finally:
-            if self.driver:
-                self.driver.quit()
+            except:
+                if self.driver:
+                    self.driver.quit()
 
     def stop(self):
         """Stop the monitoring bot."""
