@@ -274,11 +274,6 @@ class BotManager:
         """Get available memory in GB"""
         return psutil.virtual_memory().available / (1024 * 1024 * 1024)
 
-    def calculate_target_instances(self):
-        """Calculate target number of instances based on available memory"""
-        available_memory = self.get_available_memory()
-        target = int((available_memory - self.memory_threshold) / self.chrome_memory_usage)
-        return max(1, min(target, 100))  # Keep between 1 and 100 instances
 
     def scale_instances(self):
         """Add or remove instances based on available memory"""
@@ -296,8 +291,7 @@ class BotManager:
                         instance.join()
                         print(f"\n[Scaling] Removed instance (memory: {available_memory:.2f}GB)")
                     elif available_memory > self.memory_threshold + 0.5:  # Add buffer to prevent oscillation
-                        target_instances = self.calculate_target_instances()
-                        if current_instances < target_instances:
+                        if True:
                             # Add one instance
                             new_instance = FreericeBot(
                                 current_instances + 1, 
@@ -399,42 +393,6 @@ class BotManager:
         self.last_5_min_stats.clear()
         self.start_time = time()
 
-    def scale_instances(self):
-        """Add or remove instances based on available memory"""
-        while self.scaling_event.is_set():
-            current_time = time()
-            if current_time - self.last_scale_time >= self.scale_interval:
-                available_memory = self.get_available_memory()
-                current_instances = len(self.instances)
-                
-                with self.instance_lock:
-                    if available_memory < self.memory_threshold and current_instances > 1:
-                        # Remove one instance
-                        instance = self.instances.pop()
-                        instance.running_event.clear()
-                        instance.join()
-                        print(f"\n[Scaling] Removed instance (memory: {available_memory:.2f}GB)")
-                    elif available_memory > self.memory_threshold + 0.5:
-                        target_instances = self.calculate_target_instances()
-                        if current_instances < target_instances:
-                            # Add one instance with proper proxy if enabled
-                            proxy = 'none'
-                            if PROXIED:
-                                proxies = fetch_proxies()
-                                proxy = proxies[current_instances % len(proxies) - 1]
-                            
-                            new_instance = FreericeBot(
-                                current_instances + 1, 
-                                self.stats, 
-                                self.running_event,
-                                proxy
-                            )
-                            new_instance.start()
-                            self.instances.append(new_instance)
-                            print(f"\n[Scaling] Added instance (memory: {available_memory:.2f}GB)")
-                
-                self.last_scale_time = current_time
-            sleep(1)
 
 def main():
     parser = argparse.ArgumentParser(description='Freerice Bot Manager')
