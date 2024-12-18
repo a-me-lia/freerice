@@ -185,11 +185,10 @@ class FreericeBot(Thread):
                         if rate_limit.is_set():
                             print(bcolors.WARNING + f"[Instance {self.instance_id}] Halted from monitor signal" + bcolors.ENDC)
                         while rate_limit.is_set():
-                            time.sleep(1)
                             if not rate_limit.is_set():
                                 print(bcolors.OKBLUE + f"[Instance {self.instance_id}] Restarted after rate limit cleared" + bcolors.ENDC)
-                                continue
-
+                                break
+                            continue
                         # Find and click correct answer button
                         buttons = WebDriverWait(self.driver, 10).until(
                             EC.presence_of_all_elements_located((By.CLASS_NAME, "card-button"))
@@ -310,7 +309,7 @@ class BotManager:
         """Continuously print stats until stopped"""
         while self.print_stats_event.is_set():
             self.print_stats()
-            sleep(1)
+            sleep(15)
 
     def print_stats(self):
         """Print current statistics"""
